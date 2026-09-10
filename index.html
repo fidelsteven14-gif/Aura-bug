@@ -165,15 +165,16 @@
         &copy; 2026 Vortex Hotspot Billing System. All rights reserved.
     </footer>
 
-    <!-- Client-side Logic Script Connected to Render Backend -->
+    <!-- Fully Client-Side Local Storage Logic for GitHub Pages -->
     <script>
-        const API_BASE_URL = 'https://vortex-wi-fi-billing.onrender.com';
         let currentPackage = {};
+        let activeTimerInterval = null;
 
         window.addEventListener('DOMContentLoaded', () => {
-            const token = localStorage.getItem('token');
+            const token = localStorage.getItem('vortex_token');
             if (token) {
                 showDashboard();
+                checkActiveSubscription();
             }
         });
 
@@ -198,69 +199,62 @@
             }
         }
 
-        async function handleLogin(e) {
+        function handleLogin(e) {
             e.preventDefault();
-            const identifier = document.getElementById('login-identifier').value;
+            const identifier = document.getElementById('login-identifier').value.trim();
             const password = document.getElementById('login-password').value;
             const alertBox = document.getElementById('auth-alert');
-            alertBox.innerText = 'Connecting to server...';
 
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ identifier, password })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    localStorage.setItem('token', data.token);
-                    localStorage.setItem('username', data.username || 'User');
-                    showDashboard();
-                } else {
-                    alertBox.innerText = data.message || 'Login failed.';
-                }
-            } catch (err) {
-                alertBox.innerText = 'Network error. Backend might be waking up.';
+            // Retrieve registered users from local storage
+            const users = JSON.parse(localStorage.getItem('vortex_users') || '[]');
+            const user = users.find(u => (u.email === identifier || u.phone === identifier || u.username === identifier) && u.password === password);
+
+            if (user) {
+                localStorage.setItem('vortex_token', 'local_session_' + Date.now());
+                localStorage.setItem('vortex_username', user.username);
+                localStorage.setItem('vortex_phone', user.phone);
+                showDashboard();
+                checkActiveSubscription();
+            } else {
+                alertBox.innerText = 'Invalid credentials or account does not exist. Please register.';
             }
         }
 
-        async function handleRegister(e) {
+        function handleRegister(e) {
             e.preventDefault();
-            const username = document.getElementById('reg-username').value;
-            const email = document.getElementById('reg-email').value;
-            const phone = document.getElementById('reg-phone').value;
+            const username = document.getElementById('reg-username').value.trim();
+            const email = document.getElementById('reg-email').value.trim();
+            const phone = document.getElementById('reg-phone').value.trim();
             const password = document.getElementById('reg-password').value;
             const alertBox = document.getElementById('auth-alert');
-            alertBox.innerText = 'Creating account...';
 
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, email, phone, password })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    alert('Registration successful! Please log in.');
-                    switchTab('login');
-                } else {
-                    alertBox.innerText = data.message || 'Registration failed.';
-                }
-            } catch (err) {
-                alertBox.innerText = 'Network error. Please try again.';
+            let users = JSON.parse(localStorage.getItem('vortex_users') || '[]');
+            
+            // Check if user already exists
+            if (users.some(u => u.email === email || u.phone === phone)) {
+                alertBox.innerText = 'Account with this email or phone already exists.';
+                return;
             }
+
+            users.push({ username, email, phone, password });
+            localStorage.setItem('vortex_users', JSON.stringify(users));
+            
+            alert('Registration successful! Please log in.');
+            switchTab('login');
         }
 
         function showDashboard() {
             document.getElementById('auth-section').classList.add('hidden');
             document.getElementById('dashboard-section').classList.remove('hidden');
             document.getElementById('nav-user-info').classList.remove('hidden');
-            document.getElementById('nav-username').innerText = localStorage.getItem('username') || 'Member';
+            document.getElementById('nav-username').innerText = localStorage.getItem('vortex_username') || 'Member';
         }
 
         function logout() {
-            localStorage.removeItem('token');
-            localStorage.removeItem('username');
+            localStorage.removeItem('vortex_token');
+            localStorage.removeItem('vortex_username');
+            localStorage.removeItem('vortex_phone');
+            if (activeTimerInterval) clearInterval(activeTimerInterval);
             location.reload();
         }
 
@@ -269,6 +263,12 @@
             document.getElementById('modal-title').innerText = `Buy ${name}`;
             document.getElementById('modal-package-desc').innerText = `Total Cost: Ksh ${amount}`;
             
+            // Pre-fill phone if available in storage
+            const savedPhone = localStorage.getItem('vortex_phone') || '';
+            if (savedPhone) {
+                document.getElementById('modal-phone').value = savedPhone;
+            }
+
             const statusBox = document.getElementById('payment-status-box');
             statusBox.classList.add('hidden');
             statusBox.innerHTML = '';
@@ -281,8 +281,8 @@
             document.getElementById('payment-modal').classList.add('hidden');
         }
 
-        async function executeStkPush() {
-            const phone = document.getElementById('modal-phone').value;
+        function executeStkPush() {
+            const phone = document.getElementById('modal-phone').value.trim();
             const statusBox = document.getElementById('payment-status-box');
             const payBtn = document.getElementById('modal-pay-btn');
 
@@ -295,64 +295,83 @@
 
             payBtn.disabled = true;
 
-            // Notification 1: STK Prompt Triggered
+            // Step 1: STK Prompt Triggered simulation
             statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-cyan-500/10 border-cyan-500/30 text-cyan-400 flex items-center space-x-2';
-            statusBox.innerHTML = `<svg class="animate-spin h-4 w-4 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>Please enter your M-Pesa PIN to complete the payment.</span>`;
+            statusBox.innerHTML = `<svg class="animate-spin h-4 w-4 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>STK push sent to ${phone}. Please enter your M-Pesa PIN.</span>`;
             statusBox.classList.remove('hidden');
 
-            const token = localStorage.getItem('token');
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/payment/stkpush`, {
-                    method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ 
-                        amount: currentPackage.amount, 
-                        packageName: currentPackage.name, 
-                        durationMinutes: currentPackage.durationMinutes,
-                        phone: phone 
-                    })
-                });
-                const data = await res.json();
+            // Step 2: Verifying payment simulation
+            setTimeout(() => {
+                statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-amber-500/10 border-amber-500/30 text-amber-400 flex items-center space-x-2';
+                statusBox.innerHTML = `<svg class="animate-spin h-4 w-4 text-amber-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>Verifying payment with Safaricom...</span>`;
+            }, 3000);
 
-                if (res.ok) {
-                    // Notification 2: Verifying payment
-                    setTimeout(() => {
-                        statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-amber-500/10 border-amber-500/30 text-amber-400 flex items-center space-x-2';
-                        statusBox.innerHTML = `<svg class="animate-spin h-4 w-4 text-amber-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>Verifying payment... Please wait.</span>`;
-                    }, 4000);
+            // Step 3: Success and grant package access
+            setTimeout(() => {
+                statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
+                statusBox.innerText = 'Payment successful! Wi-Fi access granted.';
+                
+                // Save subscription expiration time in localStorage
+                const expiryTime = new Date().getTime() + (currentPackage.durationMinutes * 60 * 1000);
+                const username = localStorage.getItem('vortex_username');
+                localStorage.setItem(`vortex_expiry_${username}`, expiryTime);
 
-                    // Verification check simulation / success handler
-                    setTimeout(() => {
-                        const isSuccessful = true;
-
-                        if (isSuccessful) {
-                            statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
-                            statusBox.innerText = 'Payment successful! Wi-Fi access granted.';
-                            payBtn.disabled = false;
-                            setTimeout(() => {
-                                closePaymentModal();
-                                location.reload();
-                            }, 2500);
-                        } else {
-                            statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-rose-500/10 border-rose-500/30 text-rose-400';
-                            statusBox.innerText = 'Payment failed: Insufficient amount in your M-Pesa account.';
-                            payBtn.disabled = false;
-                        }
-                    }, 8000);
-
-                } else {
-                    statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-rose-500/10 border-rose-500/30 text-rose-400';
-                    statusBox.innerText = data.message || 'Payment initiation failed. Check balance or try again.';
-                    payBtn.disabled = false;
-                }
-            } catch (err) {
-                statusBox.className = 'p-3.5 rounded-xl text-xs font-medium border bg-rose-500/10 border-rose-500/30 text-rose-400';
-                statusBox.innerText = 'Network error during payment processing.';
                 payBtn.disabled = false;
+                
+                setTimeout(() => {
+                    closePaymentModal();
+                    checkActiveSubscription();
+                }, 2000);
+            }, 6000);
+        }
+
+        function checkActiveSubscription() {
+            const username = localStorage.getItem('vortex_username');
+            const expiryKey = `vortex_expiry_${username}`;
+            const expiryTime = localStorage.getItem(expiryKey);
+
+            if (activeTimerInterval) clearInterval(activeTimerInterval);
+
+            if (!expiryTime) {
+                setInactiveState();
+                return;
             }
+
+            const updateTimer = () => {
+                const now = new Date().getTime();
+                const distance = expiryTime - now;
+
+                if (distance < 0) {
+                    localStorage.removeItem(expiryKey);
+                    setInactiveState();
+                    if (activeTimerInterval) clearInterval(activeTimerInterval);
+                } else {
+                    setActiveState(distance);
+                }
+            };
+
+            updateTimer();
+            activeTimerInterval = setInterval(updateTimer, 1000);
+        }
+
+        function setInactiveState() {
+            document.getElementById('status-badge').innerText = 'Inactive';
+            document.getElementById('status-badge').className = 'text-xl font-extrabold text-amber-400 mt-1';
+            document.getElementById('status-time').innerText = '00:00:00';
+            document.getElementById('status-data').innerText = '0 MB';
+        }
+
+        function setActiveState(distanceMs) {
+            document.getElementById('status-badge').innerText = 'Active (Connected)';
+            document.getElementById('status-badge').className = 'text-xl font-extrabold text-emerald-400 mt-1';
+            document.getElementById('status-data').innerText = 'Unlimited';
+
+            const hours = Math.floor((distanceMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((distanceMs % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((distanceMs % (1000 * 60)) / 1000);
+
+            const pad = (n) => String(n).padStart(2, '0');
+            document.getElementById('status-time').innerText = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
         }
     </script>
 </body>
